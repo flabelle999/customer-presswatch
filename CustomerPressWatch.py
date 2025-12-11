@@ -262,8 +262,10 @@ tl = tl.reset_index(drop=True)
 COLOR_MAP = {
     "Bell": "#7c66ff",  # orange
     "TELUS": "#b95fa3",              # violet
+    "SaskTel": "#5fb97d",              # violet
+    "Northwestel": "#6cb0e9",              # violet
 }
-company_order = [c for c in ["BCE", "TELUS"]
+company_order = [c for c in ["BCE", "TELUS","SaskTel","Northwestel"]
 #company_order = [c for c in ["Zhone Technologies", "Adtran", "Nokia", "Calix","Ciena"]
                  if c in tl["company"].unique()]
 
