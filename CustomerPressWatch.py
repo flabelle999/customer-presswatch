@@ -54,7 +54,7 @@ if page == "unsubscribe":
 # Page configuration
 # -------------------------------
 st.set_page_config(
-    page_title="Press Release Radar",
+    page_title="Customer Press Release Radar",
     page_icon="🛰️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -260,18 +260,10 @@ if "id" not in tl.columns:
 tl = tl.reset_index(drop=True)
 
 COLOR_MAP = {
-    "Zhone Technologies": "#ff8c00",  # orange
-    "Adtran": "#7c66ff",              # violet
-    "Nokia": "#007bff",               # blue
-    "Calix": "#00bfa6",               # teal
-    "Ciena": "#b95fa3",               # purple 
-    "Smartoptics": "#df1f39",         # red
-    "Ekinops" : "#000000",            # black
-    "Ribbon" : "#df1faf",            # pink
-    "Huawei" : "#72080d",            # brown
-    "ZTE" : "#697e20",            # brown
+    "Bell": "#7c66ff",  # orange
+    "TELUS": "#b95fa3",              # violet
 }
-company_order = [c for c in ["Zhone Technologies", "Adtran", "Nokia", "Calix","Ciena","Smartoptics","Ekinops","Ribbon","Huawei","ZTE"]
+company_order = [c for c in ["BCE", "TELUS"]
 #company_order = [c for c in ["Zhone Technologies", "Adtran", "Nokia", "Calix","Ciena"]
                  if c in tl["company"].unique()]
 

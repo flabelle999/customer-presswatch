@@ -1,0 +1,8 @@
+# Never commit credentials
+.streamlit/secrets*.toml
+.streamlit/secrets*.json
+.streamlit/secrets.toml
+service-account.json
+Archive/
+PressWatch Architecture.docx
+.env
