@@ -13,8 +13,8 @@ TEXT = "#1f2937"      # dark text
 MUTED = "#6b7280"     # muted gray
 
 LOGO_URL = "https://zhone.com/wp-content/themes/dzs/dist/images/logo/logo.png"
-PRESSWATCH_URL = os.getenv("DUMMY_URL", "https:presswatch.streamlit.app")
-UNSUBSCRIBE_URL = os.getenv("DUMMY_URL", "https:presswatch.streamlit.app/unsubscribe")
+PRESSWATCH_URL = os.getenv("DUMMY_URL", "https://customer-presswatch.streamlit.app/")
+UNSUBSCRIBE_URL = os.getenv("DUMMY_URL", "https://customer-presswatch.streamlit.app/Unsubscribe")
 
 
 # --- Styling helper ----------------------------------------------------------
@@ -73,7 +73,7 @@ def registration_thank_you(name: str, manage_link: str):
                 <h2>Hello, {name}!</h2>
                 <p>You’ll now receive weekly digests of competitor press releases curated by <strong>PressWatch.ai</strong>.</p>
                 <p style="margin:18px 0;">
-                  <a class="cta" href="{PRESSWATCH_URL}">Open PressWatch</a>
+                  <a class="cta" href="{PRESSWATCH_URL}">Open Customer PressWatch</a>
                 </p>
                 <p style="font-size:13px; color:{MUTED};">Manage your preferences here:
                   <a href="{manage_link}">{manage_link}</a></p>
@@ -90,7 +90,7 @@ def registration_thank_you(name: str, manage_link: str):
 
 def weekly_digest(company_updates: list, ai_summary: str, week_label: str):
     css = _base_css()
-    header = _header_html(f"Weekly Digest — {week_label}")
+    header = _header_html(f"Customer Weekly Digest — {week_label}")
 
     # --- Build list of PRs ---
     if not company_updates:
@@ -129,7 +129,7 @@ def weekly_digest(company_updates: list, ai_summary: str, week_label: str):
                 <p class="pill">AI Summary</p>
                 <div style="margin-top:10px; line-height:1.6;">{ai_summary}</div>
                 <p style="margin:18px 0 6px;">
-                  <a class="cta" href="{PRESSWATCH_URL}">Open PressWatch</a>
+                  <a class="cta" href="{PRESSWATCH_URL}">Open Customer PressWatch</a>
                 </p>
                 <hr style="border:none; border-top:1px solid #eee; margin:24px 0;">
                 <p class="pill">New Press Releases</p>
@@ -139,7 +139,7 @@ def weekly_digest(company_updates: list, ai_summary: str, week_label: str):
               </td></tr>
               <tr><td class="footer">
                 Sent automatically by PressWatch.ai • {datetime.utcnow().strftime("%B %d, %Y")} UTC<br>
-                <a class="unsubscribe" href="{UNSUBSCRIBE_URL}">Unsubscribe from PressWatch</a>
+                <a class="unsubscribe" href="{UNSUBSCRIBE_URL}">Unsubscribe from Customer PressWatch</a>
               </td></tr>
             </table>
           </td></tr>

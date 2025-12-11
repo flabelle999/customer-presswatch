@@ -22,8 +22,7 @@ from email_templates import weekly_digest
 # === Config (env-driven) =====================================================
 
 CSV_FILE = os.getenv("PR_CSV_PATH", "press_releases_master.csv")
-PRESSWATCH_URL = os.getenv("PRESSWATCH_URL", "https://presswatch.example.com")
-SHEET_NAME = os.getenv("SUBSCRIBERS_SHEET_NAME", "PressWatch Subscribers")
+SHEET_NAME = os.getenv("SUBSCRIBERS_SHEET_NAME", "Customer PressWatch Subscribers")
 SHEET_WORKSHEET = os.getenv("SUBSCRIBERS_WORKSHEET", "Subscribers")
 SENDER_UPN = os.getenv("MS_SENDER_UPN", "presswatch.ai@zhone.com")
 
@@ -109,7 +108,7 @@ def load_recent_press_releases(csv_path: str, days: int) -> List[Dict[str, Any]]
 
 def groq_ai_summary(items: List[Dict[str, Any]]) -> str:
     if not items:
-        return "No new competitor press releases were detected in the last week."
+        return "No new customer press releases were detected in the last week."
 
     if not GROQ_API_KEY:
         return "(AI summary unavailable — GROQ_API_KEY not configured in environment.)"
@@ -249,7 +248,7 @@ def main():
 
     recipients = get_subscriber_emails()
 
-    subject = f"PressWatch Weekly Digest — {week_label}"
+    subject = f"Customer PressWatch Weekly Digest — {week_label}"
     send_graph_html(subject, html, recipients, save_to_sent=False)
 
     print(f"{'Would send' if DRY_RUN else 'Sent'} to {len(recipients)} subscribers.")
