@@ -266,8 +266,11 @@ COLOR_MAP = {
     "Northwestel": "#6cb0e9",              # violet
     "Beanfield": "#e63e3e",              # violet   
     "Rogers": "#6d4e64",              # violet  
+    "Videotron": "#5c8a1f",              # violet  
+    "Sogetel": "#355e75",              # violet  
+    "MNSI": "#c02b37",              # violet
 }
-company_order = [c for c in ["BCE", "TELUS","SaskTel","Northwestel","Beanfield","Rogers"]
+company_order = [c for c in ["BCE", "TELUS","SaskTel","Northwestel","Beanfield","Rogers","Videotron","Sogetel","MNSI"]
 #company_order = [c for c in ["Zhone Technologies", "Adtran", "Nokia", "Calix","Ciena"]
                  if c in tl["company"].unique()]
 

@@ -55,7 +55,7 @@ LIST_URL_PAGED = "https://blog.beanfield.com/category/newsroom/page/{page}/"
 CUTOFF_YEAR = 2025
 
 MASTER_CSV = "press_releases_master.csv"  # in current working directory
-CSV_FIELDS = ["company", "title", "link", "date"]
+CSV_FIELDS = ["id","company", "title", "link", "date"]
 
 # Safety: don't loop forever if site changes
 MAX_LIST_PAGES = 30
@@ -366,6 +366,7 @@ def append_rows(csv_path: str, rows: List[Tuple[datetime, str, str]]) -> int:
         for dt, title, link in rows:
             writer.writerow(
                 {
+                    "id": COMPANY,
                     "company": COMPANY,
                     "title": title,
                     "link": link,
