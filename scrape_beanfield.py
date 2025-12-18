@@ -61,8 +61,8 @@ CSV_FIELDS = ["id","company", "title", "link", "date"]
 MAX_LIST_PAGES = 30
 
 # Optional verbose date debug (set True when diagnosing)
-DEBUG_DATE = True
-DEBUG_SAVE_FAIL_HTML = True
+DEBUG_DATE = False
+DEBUG_SAVE_FAIL_HTML = False
 
 # ----------------------------
 # Helpers
