@@ -42,14 +42,20 @@ jobs:
       - name: Run scrapers
         run: |
           echo "Running all PR scrapers..."
-          python getZhonePR2025.py || true
-          python getAdtranPRPages1To5.py || true
-          python getCalixPRLoadMoreDateOK.py || true
-          python getHuaweiPR2025_final.py || true
-          python getRibbonPR2025.py || true
-          python getEkinopsPR2025.py || true
-          python getCienaPR2025.py || true
-          python getZTEPR2025.py || true
+          python scrape_bce.py || true
+          python scrape_beanfield.py || true
+          python scrape_bruce.py || true
+          python scrape_cogeco.py || true
+          python scrape_eastlink.py || true
+          python scrape_mnsi.py || true
+          python scrape_nwtel.py || true
+          python scrape_rogers.py || true
+          python scrape_sasktel.py || true
+          python scrape_sogetel.py || true
+          python scrape_telus.py || true
+          python scrape_sasktel.py || true
+          python scrape_videotron.py || true
+          python scrape_xplore.py || true
           echo "✅ All scrapers completed."
 
       - name: Commit and push updates (only if changed)

@@ -272,8 +272,9 @@ COLOR_MAP = {
     "Cogeco": "#3fc02b",              # violet
     "Eastlink": "#d1ae16",              # violet
     "Bruce": "#96b2ba",              # violet
+    "Xplore": "#21ACB1",              # violet    
 }
-company_order = [c for c in ["BCE", "TELUS","SaskTel","Northwestel","Beanfield","Rogers","Videotron","Sogetel","MNSI","Cogeco","Eastlink","Bruce"]
+company_order = [c for c in ["BCE", "TELUS","SaskTel","Northwestel","Beanfield","Rogers","Videotron","Sogetel","MNSI","Cogeco","Eastlink","Bruce","Xplore"]
 #company_order = [c for c in ["Zhone Technologies", "Adtran", "Nokia", "Calix","Ciena"]
                  if c in tl["company"].unique()]
 
