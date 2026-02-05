@@ -180,7 +180,7 @@ def scrape_nwtel() -> None:
                     date_strong = a_el.find_element(
                         By.XPATH,
                         "./ancestor::div[contains(@class,'component-tab-slide__body')][1]"
-                        "//strong[contains(., '2025')]"
+                        "//strong[re:match(., '20\\d{2}')]"
                     )
                     date_text = date_strong.text.strip()
                 except Exception:
