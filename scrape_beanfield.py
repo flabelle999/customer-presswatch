@@ -4,7 +4,15 @@
 """
 Beanfield Newsroom scraper (WordPress/Elementor).
 
-- Scrapes list pages:
+NOTE (Oct 2026): blog.beanfield.com (the newsroom) was decommissioned: the whole
+host now 302-redirects to www.beanfield.com and every URL is a 404. Beanfield has
+no other public newsroom and does not publish on PR Newswire Canada / GlobeNewswire /
+Business Wire. The legacy blog scrape is kept (it is tried first, in case the blog
+comes back); when it is unavailable the scraper falls back to Cartt.ca, the Canadian
+telecom trade press, via its public WordPress API (RSS as backup), keeping only
+articles with "Beanfield" in the title and skipping events already in the CSV.
+
+- Legacy blog: scrapes list pages:
   https://blog.beanfield.com/category/newsroom/
   https://blog.beanfield.com/category/newsroom/page/2/
   ...
@@ -379,21 +387,16 @@ def append_rows(csv_path: str, rows: List[Tuple[datetime, str, str]]) -> int:
 # ----------------------------
 # Main
 # ----------------------------
-def scrape_beanfield() -> None:
-    log(f"Starting Beanfield scraper for year >= {CUTOFF_YEAR}")
+def scrape_blog(
+    session: requests.Session, existing_links: Set[str]
+) -> Optional[List[Tuple[datetime, str, str]]]:
+    """
+    Legacy source: the WordPress newsroom at blog.beanfield.com.
 
-    existing_links = load_existing_links(MASTER_CSV)
-    log(f"Existing Beanfield links in CSV: {len(existing_links)}")
-
-    session = requests.Session()
-    session.headers.update(
-        {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        }
-    )
-
+    Returns the list of new rows, or None when the blog is not available at all
+    (as of Oct 2026 the whole blog.beanfield.com host 302-redirects to
+    www.beanfield.com and every post is a 404), so the caller can use the fallback.
+    """
     new_rows: List[Tuple[datetime, str, str]] = []
 
     for page in range(1, MAX_LIST_PAGES + 1):
@@ -402,16 +405,27 @@ def scrape_beanfield() -> None:
 
         try:
             resp = session.get(list_url, timeout=30)
+            log(f"HTTP {resp.status_code} final_url={resp.url}")
+            if page == 1 and (
+                resp.status_code != 200 or not resp.url.startswith(BASE_DOMAIN)
+            ):
+                log("Legacy blog is unavailable (error status or redirected off blog host).")
+                return None
             if resp.status_code == 404:
                 log("Stop (404 - no more pages).")
                 break
             resp.raise_for_status()
         except Exception as e:
             log(f"Stop (HTTP error): {e}")
+            if page == 1:
+                return None
             break
 
         post_links = extract_post_links(resp.text)
         log(f"Found {len(post_links)} candidate post links")
+        if page == 1 and not post_links:
+            log("Legacy blog list page has no post links; treating as unavailable.")
+            return None
 
         # Track parsed dates on THIS list page (only successful parses)
         parsed_dates_this_page: List[datetime] = []
@@ -466,6 +480,162 @@ def scrape_beanfield() -> None:
             if all(d.year < CUTOFF_YEAR for d in parsed_dates_this_page):
                 log(f"Reached content older than {CUTOFF_YEAR} (parsed dates older) → stop")
                 break
+
+    return new_rows
+
+
+# ----------------------------
+# Fallback source: Cartt.ca (Canadian telecom trade press)
+# ----------------------------
+# Beanfield has no public newsroom anymore and does not use PR Newswire Canada,
+# GlobeNewswire or Business Wire (searched Oct 2026). Cartt.ca covers every
+# Beanfield announcement and exposes an open WordPress API / RSS feed.
+CARTT_API = (
+    "https://cartt.ca/wp-json/wp/v2/posts"
+    "?search=Beanfield&per_page=50&orderby=date&order=desc"
+    "&after={after}T00:00:00&_fields=date,link,title"
+)
+CARTT_RSS = "https://cartt.ca/search/Beanfield/feed/rss2/"
+
+_STOPWORDS = {
+    "beanfield", "the", "a", "an", "and", "or", "of", "to", "for", "in", "on", "as",
+    "with", "by", "its", "new", "at", "from", "is", "are", "says", "technologies",
+}
+
+
+def _title_tokens(title: str) -> Set[str]:
+    words = re.findall(r"[a-z0-9]+", (title or "").lower())
+    return {w for w in words if w not in _STOPWORDS and len(w) > 2}
+
+
+def load_existing_rows(csv_path: str) -> List[Tuple[Optional[datetime], str]]:
+    """(date, title) of existing Beanfield rows; used to avoid duplicating an event."""
+    out: List[Tuple[Optional[datetime], str]] = []
+    try:
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if (row.get("company") or "").strip() != COMPANY:
+                    continue
+                raw = (row.get("date") or "").strip()
+                dt = None
+                for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
+                    try:
+                        dt = datetime.strptime(raw, fmt)
+                        break
+                    except ValueError:
+                        continue
+                out.append((dt, (row.get("title") or "").strip()))
+    except FileNotFoundError:
+        pass
+    return out
+
+
+def _is_same_event(dt: datetime, title: str, existing_rows) -> bool:
+    """Same story already stored from another source: dates within 7 days + >=2 shared words."""
+    toks = _title_tokens(title)
+    for edt, etitle in existing_rows:
+        if edt is None or abs((dt - edt).days) > 7:
+            continue
+        if len(toks & _title_tokens(etitle)) >= 2:
+            return True
+    return False
+
+
+def fetch_cartt_items(session: requests.Session) -> List[Tuple[datetime, str, str]]:
+    """Returns (date, title, link) for Cartt articles about Beanfield dated >= cutoff."""
+    import html as _html
+    from email.utils import parsedate_to_datetime
+
+    items: List[Tuple[datetime, str, str]] = []
+    cutoff = datetime(CUTOFF_YEAR, 1, 1)
+
+    # 1) WordPress REST API
+    try:
+        url = CARTT_API.format(after=cutoff.strftime("%Y-%m-%d"))
+        r = session.get(url, timeout=30, headers={"Accept": "application/json"})
+        log(f"[cartt api] HTTP {r.status_code}")
+        r.raise_for_status()
+        for p in r.json():
+            dt = _try_parse_iso(str(p.get("date") or ""))
+            title = _html.unescape(((p.get("title") or {}).get("rendered") or "")).strip()
+            link = str(p.get("link") or "").strip().rstrip("/")
+            if dt and title and link:
+                items.append((dt, title, link))
+        log(f"[cartt api] {len(items)} items")
+    except Exception as e:
+        log(f"[cartt api] failed: {e}")
+
+    # 2) RSS fallback
+    if not items:
+        try:
+            r = session.get(CARTT_RSS, timeout=30, headers={"Accept": "application/rss+xml,*/*"})
+            log(f"[cartt rss] HTTP {r.status_code}")
+            r.raise_for_status()
+            import xml.etree.ElementTree as ET
+
+            root = ET.fromstring(r.content)
+            for it in root.iter("item"):
+                title = (it.findtext("title") or "").strip()
+                link = (it.findtext("link") or "").strip()
+                pub = (it.findtext("pubDate") or "").strip()
+                if not (title and link and pub):
+                    continue
+                try:
+                    dt = parsedate_to_datetime(pub).replace(tzinfo=None)
+                except Exception:
+                    continue
+                items.append((dt, _html.unescape(title), link.rstrip("/")))
+            log(f"[cartt rss] {len(items)} items")
+        except Exception as e:
+            log(f"[cartt rss] failed: {e}")
+
+    # Keep only articles that actually name Beanfield in the title, >= cutoff
+    return [
+        (dt, title, link)
+        for dt, title, link in items
+        if dt >= cutoff and "beanfield" in title.lower()
+    ]
+
+
+def scrape_fallback(
+    session: requests.Session, existing_links: Set[str], existing_rows
+) -> List[Tuple[datetime, str, str]]:
+    log("Using fallback source: Cartt.ca (blog.beanfield.com is gone)")
+    out: List[Tuple[datetime, str, str]] = []
+    for dt, title, link in fetch_cartt_items(session):
+        if link in existing_links:
+            continue
+        if _is_same_event(dt, title, existing_rows):
+            log(f"Skip (same event already in CSV): {dt.strftime('%Y-%m-%d')} | {title}")
+            continue
+        log(f"PR: {dt.strftime('%Y-%m-%d')} | {title}")
+        existing_links.add(link)
+        existing_rows.append((dt, title))
+        out.append((dt, title, link))
+    return out
+
+
+def scrape_beanfield() -> None:
+    log(f"Starting Beanfield scraper for year >= {CUTOFF_YEAR}")
+
+    existing_links = load_existing_links(MASTER_CSV)
+    existing_rows = load_existing_rows(MASTER_CSV)
+    log(f"Existing Beanfield links in CSV: {len(existing_links)}")
+
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/141.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-CA,en;q=0.9",
+        }
+    )
+
+    new_rows = scrape_blog(session, existing_links)
+    if new_rows is None:
+        new_rows = scrape_fallback(session, existing_links, existing_rows)
 
     # Sort new rows by date descending
     new_rows.sort(key=lambda x: x[0], reverse=True)

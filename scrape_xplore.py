@@ -52,7 +52,7 @@ DEFAULT_MASTER_CSV = "press_releases_master.csv"
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36"
+    "Chrome/141.0.0.0 Safari/537.36"
 )
 
 
@@ -154,6 +154,10 @@ def _is_xplore_news_url(href: str) -> bool:
     if "/about/news/" not in full:
         return False
     if full.rstrip("/") == BASE_LIST_URL.rstrip("/"):
+        return False
+    # Pagination links (/about/news/page/2/ ...) are not articles; they were being saved
+    # as fake releases titled after the last card heading on the page.
+    if re.search(r"/about/news/page/\d+/?$", full):
         return False
     return True
 

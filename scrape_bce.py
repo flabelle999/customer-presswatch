@@ -17,7 +17,7 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0 Safari/537.36"
+        "Chrome/141.0.0.0 Safari/537.36"
     )
 }
 
@@ -58,8 +58,34 @@ def load_master(path: str):
         reader = csv.DictReader(f)
         rows = list(reader)
 
-    existing_keys = {(r["company"], r["title"], r["date"]) for r in rows}
+    # Dedup keys: (company, title, ISO date) AND the article slug from the link.
+    # Dates in the master are sometimes rewritten as M/D/YYYY (e.g., after opening the CSV
+    # in Excel), and BCE links carry a varying ?page=N, so the old exact-match key let the
+    # same release be re-added over and over.
+    existing_keys = set()
+    for r in rows:
+        existing_keys.add((r.get("company", ""), r.get("title", ""), _iso_date(r.get("date", ""))))
+        slug = _article_slug(r.get("link", ""))
+        if slug:
+            existing_keys.add(("slug", slug))
     return rows, existing_keys
+
+
+def _iso_date(s: str) -> str:
+    s = (s or "").strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%B %d, %Y"):
+        try:
+            return datetime.strptime(s, fmt).date().isoformat()
+        except ValueError:
+            pass
+    return s
+
+
+def _article_slug(link: str) -> str:
+    link = normalize_bce_link(link or "")
+    if "article=" in link:
+        return link.split("article=", 1)[1].split("&", 1)[0].strip().lower()
+    return ""
 
 
 def append_rows(path: str, new_rows):
@@ -226,7 +252,8 @@ def scrape_bce():
     new_rows = []
     for dt, title, link in unique.values():
         key = (COMPANY, title, dt.date().isoformat())
-        if key in existing_keys:
+        slug = _article_slug(link)
+        if key in existing_keys or (slug and ("slug", slug) in existing_keys):
             continue
         row = {
             "id": str(uuid.uuid4()),

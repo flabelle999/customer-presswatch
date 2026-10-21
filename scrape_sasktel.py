@@ -23,7 +23,7 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0 Safari/537.36"
+        "Chrome/141.0.0.0 Safari/537.36"
     )
 }
 
@@ -43,8 +43,26 @@ def load_master(path: str):
             reader = csv.DictReader(f2)
             rows = list(reader)
 
-    existing = {(r.get("company", ""), r.get("title", ""), r.get("date", "")) for r in rows}
+    # The master CSV may have been re-saved in Excel, which rewrites ISO dates as
+    # M/D/YYYY and can garble non-ASCII characters in titles. Normalize the date
+    # so the (company, title, date) key still matches.
+    existing = {
+        (r.get("company", ""), r.get("title", ""), normalize_date_str(r.get("date", "")))
+        for r in rows
+    }
     return rows, existing
+
+
+def normalize_date_str(s: str) -> str:
+    """Return an ISO date (YYYY-MM-DD) for ISO or M/D/YYYY strings; else the input."""
+    s = (s or "").strip()
+    token = s.split()[0] if s else ""
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y"):
+        try:
+            return datetime.strptime(token[:10] if fmt == "%Y-%m-%d" else token, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return s
 
 
 def append_rows(path: str, new_rows):
@@ -140,7 +158,14 @@ def scrape_archive_year(year: int):
 
 def scrape_sasktel():
     print("[SASKTEL] Starting SaskTel scraper...")
-    _, existing = load_master(MASTER_CSV)
+    master_rows, existing = load_master(MASTER_CSV)
+    # Link-based dedup as well: titles in the master can differ from the live page
+    # (e.g., mojibake from Excel), but the SaskTel link is stable.
+    existing_links = {
+        r.get("link", "").strip()
+        for r in master_rows
+        if r.get("company") == COMPANY and r.get("link")
+    }
 
     # Auto-include current year down to cutoff year so 2026+ never gets missed.
     now_year = datetime.now(timezone.utc).year
@@ -164,7 +189,7 @@ def scrape_sasktel():
     for dt, title, link in unique.values():
         date_iso = dt.date().isoformat()
         key = (COMPANY, title, date_iso)
-        if key in existing:
+        if key in existing or link in existing_links:
             continue
 
         new_rows.append({

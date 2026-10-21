@@ -54,7 +54,8 @@ GOOGLE_SERVICE_JSON = load_google_service_json()
 
 # GROQ (OpenAI-compatible)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+# llama-3.3-70b-versatile was retired by Groq on 2026-08-16 — see console.groq.com/docs/deprecations
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_URL = os.getenv("GROQ_URL", "https://api.groq.com/openai/v1/chat/completions")
 
 # Options
@@ -84,7 +85,7 @@ def load_recent_press_releases(csv_path: str, days: int) -> List[Dict[str, Any]]
     if not os.path.exists(csv_path):
         return out
 
-    with open(csv_path, newline="", encoding="cp1252", errors="replace") as f:
+    with open(csv_path, newline="", encoding="utf-8-sig", errors="replace") as f:
         reader = csv.DictReader(f)
         for row in reader:
             title = row.get("title") or row.get("headline") or row.get("Title")
@@ -106,6 +107,14 @@ def load_recent_press_releases(csv_path: str, days: int) -> List[Dict[str, Any]]
     return out
 
 
+def _limit_sentences(text: str, max_sentences: int = 2) -> str:
+    """Safety net in case the model ignores the length limit: keep the first N sentences."""
+    import re
+    flat = " ".join(text.split())  # collapse line breaks / extra paragraphs
+    sentences = re.split(r"(?<=[.!?])\s+", flat)
+    return " ".join(sentences[:max_sentences]).strip()
+
+
 def groq_ai_summary(items: List[Dict[str, Any]]) -> str:
     if not items:
         return "No new customer press releases were detected in the last week."
@@ -116,24 +125,38 @@ def groq_ai_summary(items: List[Dict[str, Any]]) -> str:
     try:
         messages = [
             {"role": "system", "content": (
-            "You are summarizing telecom and broadband competitor press releases for a weekly email digest. "
+            "You are summarizing press releases from Canadian telecom and broadband service providers "
+            "(Zhone Technologies customers) for a weekly email digest. "
             "Write in a friendly, executive tone, as if explaining the news over a coffee break. "
             "Highlight only the most meaningful developments and avoid corporate jargon. "
             "Keep it digestible, engaging, and easy to skim. "
-            "Use short paragraphs and clear transitions. Keep at 4-5 lines maximum."
-            "Focus on what happened, why it matters, and the overall vibe of the week."
+            "Focus on what happened and why it matters. "
+            "LENGTH LIMIT: at most 2 sentences and 45 words in total, written as a single paragraph. "
+            "Do not open with a greeting or filler such as 'Exciting week in telecom' — start directly with the news."
             )},
             {"role": "user", "content": "\n".join(
                 [f"- {i['source']} — {i['title']} ({i['date'].strftime('%Y-%m-%d')}): {i['url']}" for i in items[:20]]
             )},
         ]
         headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-        payload = {"model": GROQ_MODEL, "messages": messages, "temperature": 0.3, "max_tokens": 350}
+        # gpt-oss is a reasoning model: reasoning tokens count against max_tokens,
+        # so keep reasoning low and leave headroom for the visible answer.
+        payload = {"model": GROQ_MODEL, "messages": messages, "temperature": 0.3, "max_tokens": 1500}
+        if GROQ_MODEL.startswith("openai/gpt-oss"):
+            payload["reasoning_effort"] = "low"
         r = requests.post(GROQ_URL, headers=headers, data=json.dumps(payload), timeout=60)
-        r.raise_for_status()
+        if r.status_code != 200:
+            print(f"::warning::Groq API error {r.status_code} (model={GROQ_MODEL}): {r.text[:500]}")
+            r.raise_for_status()
         data = r.json()
-        return data["choices"][0]["message"]["content"].strip()
-    except Exception:
+        content = (data["choices"][0]["message"].get("content") or "").strip()
+        if not content:
+            print(f"::warning::Groq returned an empty summary (model={GROQ_MODEL}, "
+                  f"finish_reason={data['choices'][0].get('finish_reason')})")
+            return "AI summary unavailable"
+        return _limit_sentences(content, 2)
+    except Exception as e:
+        print(f"::warning::AI summary failed: {e}")
         return "AI summary unavailable"
 
 
@@ -241,6 +264,7 @@ def get_subscriber_emails() -> List[str]:
 def main():
     prs = load_recent_press_releases(CSV_FILE, WINDOW_DAYS)
     summary = groq_ai_summary(prs)
+    print(f"{len(prs)} press release(s) in the last {WINDOW_DAYS} days. AI summary: {summary}")
 
     week_label = f"{(datetime.utcnow() - timedelta(days=WINDOW_DAYS)).strftime('%b %d')}–{datetime.utcnow().strftime('%b %d, %Y')}"
     items = [{"title": p["title"], "url": p["url"], "source": p["source"], "date": p["date"]} for p in prs]

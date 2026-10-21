@@ -34,6 +34,7 @@ import argparse
 import csv
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Optional, Set, List, Dict, Tuple
@@ -59,7 +60,7 @@ DEFAULT_MASTER_CSV = "press_releases_master.csv"
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36"
+    "Chrome/141.0.0.0 Safari/537.36"
 )
 
 
@@ -85,10 +86,19 @@ def _safe_text(el) -> str:
     return re.sub(r"\s+", " ", el.get_text(" ", strip=True)).strip()
 
 
-def _http_get(url: str, timeout: int = 30) -> str:
-    r = requests.get(url, headers={"User-Agent": UA}, timeout=timeout)
-    r.raise_for_status()
-    return r.text
+def _http_get(url: str, timeout: int = 45, attempts: int = 3) -> str:
+    # corpo.cogeco.com is sometimes slow to answer; retry before giving up
+    last_exc = None
+    for i in range(attempts):
+        try:
+            r = requests.get(url, headers={"User-Agent": UA}, timeout=timeout)
+            r.raise_for_status()
+            return r.text
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            last_exc = e
+            print(f"[COGECO] Fetch attempt {i + 1}/{attempts} failed for {url}: {e}")
+            time.sleep(5 * (i + 1))
+    raise last_exc
 
 
 def _parse_date_any(s: str) -> Optional[date]:

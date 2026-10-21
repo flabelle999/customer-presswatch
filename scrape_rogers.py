@@ -1,7 +1,14 @@
 """
 scrape_rogers.py
 
-Rogers "News & Ideas" scraper (>= Jan 1, 2025) with Selenium "Load more".
+Rogers newsroom scraper (>= Jan 1, 2025).
+
+Strategy (about.rogers.com is a WordPress site, now served under /news/):
+  1) WordPress REST API (wp-json/wp/v2/posts) via requests  -> exact titles, links, dates
+  2) Same REST API loaded through headless Chrome (Selenium)  -> if plain requests is blocked
+  3) Legacy HTML listing parse (Selenium "Load more" or requests) -> last resort
+NOTE: the server returns 403 to outdated browser User-Agents (Chrome < 130) and to
+the default python-requests UA, so keep UA below reasonably current.
 Can be:
   A) imported by orchestrator: scrape_rogers(...)
   B) run standalone to append to master CSV:
@@ -13,6 +20,7 @@ Deps:
 
 import argparse
 import csv
+import html as html_lib
 import json
 import os
 import re
@@ -30,13 +38,15 @@ except Exception:  # pragma: no cover
     date_parser = None
 
 
-BASE_LIST_URL = "https://about.rogers.com/news-ideas/"
+BASE_LIST_URL = "https://about.rogers.com/news-ideas/"  # redirects to /news/
+API_POSTS_URL = "https://about.rogers.com/wp-json/wp/v2/posts"
 COMPANY_NAME = "Rogers"
 
+# Must look like a current browser: the site returns 403 for Chrome < 130.
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36"
+    "Chrome/141.0.0.0 Safari/537.36"
 )
 
 
@@ -73,11 +83,24 @@ def _is_article_url(href: str) -> bool:
 
     if "about.rogers.com" not in href:
         return False
-    if "/news-ideas/" not in href:
+
+    # Articles live under /news/<slug>/ (older ones were /news-ideas/<slug>/).
+    if _slug_from_url(href) == "":
         return False
 
     bad_parts = ["/category/", "/tag/", "/page/", "?s="]
     return not any(b in href for b in bad_parts)
+
+
+def _slug_from_url(url: str) -> str:
+    """
+    Return the article slug for /news/<slug>/ or /news-ideas/<slug>/ URLs ('' if not an article).
+    The slug is the dedup key, so links stored in the master CSV under the old
+    /news-ideas/ prefix still match the new /news/ prefix.
+    """
+    path = urlparse(url or "").path
+    m = re.match(r"^/(?:news|news-ideas)/([^/]+)/?$", path)
+    return m.group(1).lower() if m else ""
 
 
 def _parse_date_any(s: str) -> Optional[date]:
@@ -108,9 +131,98 @@ def _parse_date_any(s: str) -> Optional[date]:
 
 
 def _http_get(url: str, timeout: int = 30) -> str:
-    r = requests.get(url, headers={"User-Agent": UA}, timeout=timeout)
+    r = requests.get(url, headers=_HEADERS, timeout=timeout)
     r.raise_for_status()
     return r.text
+
+
+_HEADERS = {
+    "User-Agent": UA,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+# -----------------------------
+# WordPress REST API source (preferred)
+# -----------------------------
+
+def _clean_title(raw: str) -> str:
+    return re.sub(r"\s+", " ", html_lib.unescape(raw or "").replace(" ", " ")).strip()
+
+
+def _posts_from_api_json(data) -> List[Tuple[str, str, Optional[date]]]:
+    out: List[Tuple[str, str, Optional[date]]] = []
+    if not isinstance(data, list):
+        return out
+    for p in data:
+        if not isinstance(p, dict):
+            continue
+        link = _norm_url(p.get("link", ""))
+        title = _clean_title((p.get("title") or {}).get("rendered", ""))
+        d = _parse_date_any(str(p.get("date", ""))[:10])  # site-local publish date
+        if link and title and _is_article_url(link):
+            out.append((title, link, d))
+    return out
+
+
+def _api_page_url(since: date, page: int) -> str:
+    return (
+        f"{API_POSTS_URL}?per_page=100&page={page}&orderby=date&order=desc"
+        f"&after={since.isoformat()}T00:00:00&_fields=id,date,link,title"
+    )
+
+
+def _fetch_api_with_requests(since: date, max_pages: int = 30) -> List[Tuple[str, str, Optional[date]]]:
+    items: List[Tuple[str, str, Optional[date]]] = []
+    for page in range(1, max_pages + 1):
+        r = requests.get(_api_page_url(since, page), headers=_HEADERS, timeout=30)
+        if r.status_code == 400 and page > 1:  # page number past the last page
+            break
+        r.raise_for_status()
+        batch = _posts_from_api_json(r.json())
+        items.extend(batch)
+        if len(r.json()) < 100:
+            break
+    return items
+
+
+def _fetch_api_with_selenium(since: date, max_pages: int = 30, debug: bool = True) -> List[Tuple[str, str, Optional[date]]]:
+    """Load the same REST API URLs in headless Chrome (real browser fingerprint)."""
+    from selenium import webdriver
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service as ChromeService
+    from webdriver_manager.chrome import ChromeDriverManager
+
+    opts = Options()
+    opts.add_argument("--headless=new")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--window-size=1400,1000")
+    opts.add_argument("--disable-blink-features=AutomationControlled")
+    opts.add_argument(f"--user-agent={UA}")
+
+    driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=opts)
+    items: List[Tuple[str, str, Optional[date]]] = []
+    try:
+        for page in range(1, max_pages + 1):
+            driver.get(_api_page_url(since, page))
+            body = driver.find_element(By.TAG_NAME, "body").text.strip()
+            try:
+                data = json.loads(body)
+            except Exception:
+                raise RuntimeError(f"Browser did not receive JSON (page {page}): {body[:120]!r}")
+            if isinstance(data, dict):  # error object, e.g. invalid page number
+                if page > 1:
+                    break
+                raise RuntimeError(f"API error: {body[:120]!r}")
+            items.extend(_posts_from_api_json(data))
+            if len(data) < 100:
+                break
+    finally:
+        driver.quit()
+    return items
 
 
 # -----------------------------
@@ -258,6 +370,7 @@ def _get_listing_html_with_selenium_load_more(
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--window-size=1400,1000")
+    opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_argument(f"--user-agent={UA}")
 
     driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=opts)
@@ -272,7 +385,7 @@ def _get_listing_html_with_selenium_load_more(
         last_count = 0
 
         for i in range(max_clicks):
-            links = driver.find_elements(By.CSS_SELECTOR, "a[href*='/news-ideas/']")
+            links = driver.find_elements(By.CSS_SELECTOR, "a[href*='/news/'], a[href*='/news-ideas/']")
             count = len(links)
             log(f"Iteration {i+1}/{max_clicks} - visible /news-ideas/ links: {count}")
 
@@ -393,27 +506,51 @@ def scrape_rogers(
     log(f"Starting Rogers scraper for date >= {since.isoformat()}")
     log(f"Existing Rogers links provided: {len(existing_links)}")
 
-    if use_selenium_load_more:
-        try:
-            list_html = _get_listing_html_with_selenium_load_more(
-                BASE_LIST_URL, cutoff=since, max_clicks=selenium_max_clicks, debug=debug
-            )
-        except Exception as e:
-            log(f"Selenium listing loader failed ({e}); falling back to requests.")
-            list_html = _http_get(BASE_LIST_URL)
-    else:
-        list_html = _http_get(BASE_LIST_URL)
+    items: List[Tuple[str, str, Optional[date]]] = []
 
-    items = _parse_listing_page(list_html)
-    log(f"Found {len(items)} candidate items on listing page (after expansion).")
+    # 1) WordPress REST API via requests
+    try:
+        items = _fetch_api_with_requests(since)
+        log(f"REST API (requests) returned {len(items)} posts.")
+    except Exception as e:
+        log(f"REST API via requests failed ({e}).")
+
+    # 2) REST API via headless Chrome
+    if not items and use_selenium_load_more:
+        try:
+            items = _fetch_api_with_selenium(since, debug=debug)
+            log(f"REST API (Selenium) returned {len(items)} posts.")
+        except Exception as e:
+            log(f"REST API via Selenium failed ({e}).")
+
+    # 3) Legacy HTML listing
+    if not items:
+        log("Falling back to HTML listing parse.")
+        if use_selenium_load_more:
+            try:
+                list_html = _get_listing_html_with_selenium_load_more(
+                    BASE_LIST_URL, cutoff=since, max_clicks=selenium_max_clicks, debug=debug
+                )
+            except Exception as e:
+                log(f"Selenium listing loader failed ({e}); falling back to requests.")
+                list_html = _http_get(BASE_LIST_URL)
+        else:
+            list_html = _http_get(BASE_LIST_URL)
+
+        items = _parse_listing_page(list_html)
+        log(f"Found {len(items)} candidate items on listing page (after expansion).")
 
     added = skipped_dup = skipped_old = skipped_no_date = 0
+
+    # Dedup by slug so old /news-ideas/<slug>/ links in the master match new /news/<slug>/ links.
+    existing_slugs = {_slug_from_url(u) for u in existing_links if _slug_from_url(u)}
 
     for title, link, d in items:
         if not link:
             continue
 
-        if link in existing_links:
+        slug = _slug_from_url(link)
+        if link in existing_links or (slug and slug in existing_slugs):
             skipped_dup += 1
             continue
 
@@ -436,6 +573,8 @@ def scrape_rogers(
             continue
 
         existing_links.add(link)
+        if slug:
+            existing_slugs.add(slug)
         results.append(PRItem(company=COMPANY_NAME, title=title, link=link, date=d.isoformat()))
         added += 1
 

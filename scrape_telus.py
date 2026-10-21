@@ -43,8 +43,25 @@ def load_master(path: str):
         reader = csv.DictReader(f)
         rows = list(reader)
 
-    existing_keys = {(r["company"], r["title"], r["date"]) for r in rows}
+    # The master CSV may have been re-saved in Excel, which rewrites ISO dates as
+    # M/D/YYYY. Normalize the date so the (company, title, date) key still matches
+    # (otherwise every re-run re-adds those rows as duplicates).
+    existing_keys = {
+        (r["company"], r["title"], normalize_date_str(r["date"])) for r in rows
+    }
     return rows, existing_keys
+
+
+def normalize_date_str(s: str) -> str:
+    """Return an ISO date (YYYY-MM-DD) for ISO or M/D/YYYY strings; else the input."""
+    s = (s or "").strip()
+    token = s.split()[0] if s else ""
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y"):
+        try:
+            return datetime.strptime(token[:10] if fmt == "%Y-%m-%d" else token, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return s
 
 
 def append_rows(path: str, new_rows):
@@ -84,7 +101,19 @@ def load_all_2025_cards(driver: webdriver.Chrome):
     wait = WebDriverWait(driver, 20)
 
     # attendre la première tuile
-    wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div[data-testid^='col-']")))
+    try:
+        wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div[data-testid^='col-']")))
+    except TimeoutException:
+        # Diagnostics only: telus.com sits behind Cloudflare, which can block the page
+        # ("Attention Required") or its articles API (page shows "Showing 0 of 0 articles").
+        # That depends on the network the script runs from, not on the selector.
+        try:
+            body = driver.find_element(By.TAG_NAME, "body").text
+            snippet = " ".join(body.split())[:200]
+        except Exception:
+            snippet = "(no body text)"
+        log(f"Timed out waiting for cards. Page title: {driver.title!r}; body starts: {snippet!r}")
+        raise
 
     while True:
         cards = driver.find_elements(By.CSS_SELECTOR, "div[data-testid^='col-']")
@@ -190,7 +219,13 @@ def extract_cards_from_dom(driver: webdriver.Chrome):
 
 def scrape_telus():
     log("Starting TELUS Selenium scraper")
-    _, existing_keys = load_master(MASTER_CSV)
+    master_rows, existing_keys = load_master(MASTER_CSV)
+    # Link-based dedup too: master titles can be garbled (mojibake) while the link is stable
+    existing_links = {
+        r["link"].strip()
+        for r in master_rows
+        if r.get("company") == COMPANY and r.get("link")
+    }
 
     driver = create_driver()
     try:
@@ -216,6 +251,9 @@ def scrape_telus():
         date_str = dt.date().isoformat()
         key = (COMPANY, title, date_str)
         if key in existing_keys:
+            continue
+        # BASE_URL is only a fallback for cards without a link; don't dedup on it
+        if link != BASE_URL and link in existing_links:
             continue
 
         new_rows.append(

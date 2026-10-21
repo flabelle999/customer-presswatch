@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "0 14 * * MON"     # every Monday 14:00 UTC (9h QC time)
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: build the digest and AI summary but do not send the email"
+        type: boolean
+        default: true
 
 jobs:
   send-weekly-digest:
@@ -14,6 +19,7 @@ jobs:
     # -------------------------------
     env:
       PR_CSV_PATH: press_releases_master.csv
+      DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}   # scheduled runs always send
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
       MS_CLIENT_ID: ${{ secrets.MS_GRAPH_CLIENT_ID }}
